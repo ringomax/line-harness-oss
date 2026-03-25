@@ -9,11 +9,27 @@ import {
   getChatById,
   createChat,
   updateChat,
+  getLineAccountById,
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
 
 const chats = new Hono<Env>();
+
+function clampLoadingSeconds(value: number | undefined): number {
+  const n = Number.isFinite(value) ? Math.floor(value as number) : 5;
+  return Math.min(60, Math.max(5, n));
+}
+
+async function resolveAccessTokenForFriend(
+  db: D1Database,
+  defaultToken: string,
+  lineAccountId: string | null | undefined,
+): Promise<string> {
+  if (!lineAccountId) return defaultToken;
+  const account = await getLineAccountById(db, lineAccountId);
+  return account?.channel_access_token ?? defaultToken;
+}
 
 // ========== オペレーターCRUD ==========
 
@@ -212,6 +228,45 @@ chats.put('/api/chats/:id', async (c) => {
   }
 });
 
+// オペレーター入力中のローディング表示を開始
+chats.post('/api/chats/:id/loading', async (c) => {
+  try {
+    const chatId = c.req.param('id');
+    const chat = await getChatById(c.env.DB, chatId);
+    if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);
+
+    let loadingSecondsInput: number | undefined;
+    try {
+      const body = await c.req.json<{ loadingSeconds?: number }>();
+      loadingSecondsInput = body.loadingSeconds;
+    } catch {
+      loadingSecondsInput = undefined;
+    }
+    const loadingSeconds = clampLoadingSeconds(loadingSecondsInput);
+
+    const friend = await c.env.DB
+      .prepare(`SELECT * FROM friends WHERE id = ?`)
+      .bind(chat.friend_id)
+      .first<{ id: string; line_user_id: string; line_account_id?: string | null }>();
+    if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
+
+    const { LineClient } = await import('@line-crm/line-sdk');
+    const accessToken = await resolveAccessTokenForFriend(
+      c.env.DB,
+      c.env.LINE_CHANNEL_ACCESS_TOKEN,
+      friend.line_account_id ?? null,
+    );
+    const lineClient = new LineClient(accessToken);
+    await lineClient.startLoadingAnimation(friend.line_user_id, loadingSeconds);
+
+    return c.json({ success: true, data: { started: true, loadingSeconds } });
+  } catch (err) {
+    console.error('POST /api/chats/:id/loading error:', err);
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    return c.json({ success: false, error: message }, 500);
+  }
+});
+
 // オペレーターからメッセージ送信
 chats.post('/api/chats/:id/send', async (c) => {
   try {
@@ -219,19 +274,40 @@ chats.post('/api/chats/:id/send', async (c) => {
     const chat = await getChatById(c.env.DB, chatId);
     if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);
 
-    const body = await c.req.json<{ messageType?: string; content: string }>();
+    const body = await c.req.json<{
+      messageType?: string;
+      content: string;
+      showLoadingAnimation?: boolean;
+      loadingSeconds?: number;
+    }>();
     if (!body.content) return c.json({ success: false, error: 'content is required' }, 400);
 
     const friend = await c.env.DB
       .prepare(`SELECT * FROM friends WHERE id = ?`)
       .bind(chat.friend_id)
-      .first<{ id: string; line_user_id: string }>();
+      .first<{ id: string; line_user_id: string; line_account_id: string | null }>();
     if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
 
     // LINE APIでメッセージ送信
     const { LineClient } = await import('@line-crm/line-sdk');
-    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    const accessToken = await resolveAccessTokenForFriend(
+      c.env.DB,
+      c.env.LINE_CHANNEL_ACCESS_TOKEN,
+      friend.line_account_id,
+    );
+    const lineClient = new LineClient(accessToken);
     const messageType = body.messageType ?? 'text';
+
+    if (body.showLoadingAnimation) {
+      try {
+        await lineClient.startLoadingAnimation(
+          friend.line_user_id,
+          clampLoadingSeconds(body.loadingSeconds),
+        );
+      } catch (err) {
+        console.error('Failed to start loading animation before send:', err);
+      }
+    }
 
     if (messageType === 'text') {
       await lineClient.pushTextMessage(friend.line_user_id, body.content);

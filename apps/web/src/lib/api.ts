@@ -52,7 +52,23 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   })
-  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const text = await res.text()
+      if (text) {
+        try {
+          const parsed = JSON.parse(text) as { error?: string }
+          detail = parsed.error ? ` - ${parsed.error}` : ` - ${text}`
+        } catch {
+          detail = ` - ${text}`
+        }
+      }
+    } catch {
+      // ignore body parse failure
+    }
+    throw new Error(`API error: ${res.status}${detail}`)
+  }
   return res.json() as Promise<T>
 }
 
@@ -348,10 +364,15 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    send: (id: string, data: { content: string; messageType?: string }) =>
+    send: (id: string, data: { content: string; messageType?: string; showLoadingAnimation?: boolean; loadingSeconds?: number }) =>
       fetchApi<ApiResponse<unknown>>(`/api/chats/${id}/send`, {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    startLoading: (id: string, data?: { loadingSeconds?: number }) =>
+      fetchApi<ApiResponse<{ started: boolean; loadingSeconds: number }>>(`/api/chats/${id}/loading`, {
+        method: 'POST',
+        body: JSON.stringify(data ?? {}),
       }),
   },
   reminders: {
