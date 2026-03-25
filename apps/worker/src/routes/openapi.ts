@@ -78,6 +78,21 @@ const spec = {
           createdAt: { type: 'string', format: 'date-time' },
         },
       },
+      Chat: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          friendId: { type: 'string', format: 'uuid' },
+          friendName: { type: 'string' },
+          friendPictureUrl: { type: 'string', nullable: true },
+          operatorId: { type: 'string', format: 'uuid', nullable: true },
+          status: { type: 'string', enum: ['unread', 'in_progress', 'resolved'] },
+          notes: { type: 'string', nullable: true },
+          lastMessageAt: { type: 'string', format: 'date-time', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+      },
       Broadcast: {
         type: 'object',
         properties: {
@@ -297,6 +312,59 @@ const spec = {
         responses: { '201': { description: 'Enrolled' } },
       },
     },
+    // ── Chats ────────────────────────────────────────────────────────────────
+    '/api/chats': {
+      get: {
+        tags: ['Chats'],
+        summary: 'チャット一覧取得',
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['unread', 'in_progress', 'resolved'] } },
+          { name: 'operatorId', in: 'query', schema: { type: 'string' } },
+          { name: 'lineAccountId', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: { '200': { description: 'Chats list' } },
+      },
+      post: {
+        tags: ['Chats'],
+        summary: 'チャット作成',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { friendId: { type: 'string' }, operatorId: { type: 'string' }, lineAccountId: { type: 'string', nullable: true } }, required: ['friendId'] } } } },
+        responses: { '201': { description: 'Chat created' }, '400': { description: 'Bad request' } },
+      },
+    },
+    '/api/chats/{id}': {
+      get: {
+        tags: ['Chats'],
+        summary: 'チャット詳細取得',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Chat detail with messages' }, '404': { description: 'Not found' } },
+      },
+      put: {
+        tags: ['Chats'],
+        summary: 'チャット更新 (担当者・ステータス・メモ)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { operatorId: { type: 'string', nullable: true }, status: { type: 'string', enum: ['unread', 'in_progress', 'resolved'] }, notes: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Chat updated' }, '404': { description: 'Not found' } },
+      },
+    },
+    '/api/chats/{id}/loading': {
+      post: {
+        tags: ['Chats'],
+        summary: '入力中ローディング表示開始',
+        description: 'LINEの /chat/loading/start を実行します。loadingSeconds は 5〜60秒に丸められます。',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { loadingSeconds: { type: 'integer', minimum: 5, maximum: 60, default: 5 } } } } } },
+        responses: { '200': { description: 'Loading started' }, '404': { description: 'Chat or friend not found' } },
+      },
+    },
+    '/api/chats/{id}/send': {
+      post: {
+        tags: ['Chats'],
+        summary: 'チャットメッセージ送信',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string' }, messageType: { type: 'string', enum: ['text', 'flex'], default: 'text' }, showLoadingAnimation: { type: 'boolean' }, loadingSeconds: { type: 'integer', minimum: 5, maximum: 60, default: 5 } }, required: ['content'] } } } },
+        responses: { '200': { description: 'Message sent' }, '400': { description: 'Bad request' }, '404': { description: 'Chat not found' } },
+      },
+    },
     // ── Broadcasts ───────────────────────────────────────────────────────────
     '/api/broadcasts': {
       get: { tags: ['Broadcasts'], summary: '配信一覧取得', responses: { '200': { description: 'All broadcasts' } } },
@@ -481,6 +549,7 @@ const spec = {
     { name: 'Friends', description: '友だち管理' },
     { name: 'Tags', description: 'タグ管理' },
     { name: 'Scenarios', description: 'ステップ配信シナリオ' },
+    { name: 'Chats', description: 'オペレーターチャット' },
     { name: 'Broadcasts', description: '一斉配信' },
     { name: 'Users', description: 'UUID Cross-Account ユーザー管理' },
     { name: 'LINE Accounts', description: 'マルチLINEアカウント管理' },
